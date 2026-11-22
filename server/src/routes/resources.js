@@ -2,6 +2,7 @@ const express = require('express');
 const { asyncHandler, pagination, toCsv } = require('../utils/http');
 const { monthBounds } = require('../utils/dates');
 const { authorize, requireEmployeeAccess } = require('../middleware/auth');
+const { calculateKenyaPayroll } = require('../utils/kenyaPayroll');
 const {
   User, Employee, Department, Attendance, Leave, Payroll, Performance, Goal, Notification
 } = require('../models');
@@ -31,6 +32,9 @@ function normalizeFields(model, body, fields) {
   } else if (model === Payroll) {
     if (source.basicSalary !== undefined) source.baseSalary = source.basicSalary;
     if (source.netSalary !== undefined) source.netPay = source.netSalary;
+    if (source.deductions !== undefined && source.otherDeductions === undefined) {
+      source.otherDeductions = source.deductions;
+    }
   } else if (model === Performance) {
     if (source.period !== undefined) source.reviewPeriod = source.period;
     if (source.feedback !== undefined) source.comments = source.feedback;
@@ -110,6 +114,14 @@ function createCollectionRouter({ model, fields, roles, populate = '', allowEmpl
   router.post('/', authorize(...(allowEmployeeCreate ? roles : writeRoles)), requireEmployeeAccess, asyncHandler(async (req, res) => {
     const data = normalizeFields(model, req.body, fields);
     if (allowEmployeeCreate && req.user.role === 'employee') data.employee = req.user.employee._id;
+    if (model === Payroll) {
+      const employee = await Employee.findById(data.employee)
+        .select('nssfExempt shifExempt housingLevyExempt payeExempt');
+      if (!employee) return res.status(400).json({ success: false, message: 'Employee not found' });
+      for (const field of ['nssfExempt', 'shifExempt', 'housingLevyExempt', 'payeExempt']) {
+        if (data[field] === undefined) data[field] = employee[field];
+      }
+    }
     if (model === Leave && data.startDate && data.endDate) {
       const start = new Date(data.startDate);
       const end = new Date(data.endDate);
@@ -222,17 +234,33 @@ function createCollectionRouter({ model, fields, roles, populate = '', allowEmpl
 
 const employeeFields = [
   'employeeId', 'firstName', 'lastName', 'email', 'phone', 'address', 'dateOfBirth',
-  'hireDate', 'jobTitle', 'department', 'manager', 'employmentStatus', 'salary', 'emergencyContact'
+  'hireDate', 'jobTitle', 'department', 'manager', 'employmentStatus', 'salary', 'emergencyContact',
+  'nssfExempt', 'shifExempt', 'housingLevyExempt', 'payeExempt'
 ];
 const departmentFields = ['name', 'description', 'manager', 'budget'];
 const attendanceFields = ['employee', 'date', 'checkIn', 'checkOut', 'status', 'notes'];
 const leaveFields = ['employee', 'type', 'startDate', 'endDate', 'days', 'reason'];
-const payrollFields = ['employee', 'periodStart', 'periodEnd', 'baseSalary', 'allowances', 'bonuses', 'deductions', 'tax', 'netPay', 'currency', 'paymentDate'];
+const payrollFields = [
+  'employee', 'periodStart', 'periodEnd', 'baseSalary', 'allowances', 'bonuses',
+  'otherDeductions', 'deductions', 'insurancePremium', 'nssfExempt', 'shifExempt',
+  'housingLevyExempt', 'payeExempt', 'paymentDate'
+];
 const performanceFields = ['employee', 'reviewer', 'reviewPeriod', 'rating', 'strengths', 'improvements', 'comments', 'status'];
 const goalFields = ['employee', 'title', 'description', 'dueDate', 'progress', 'status'];
 const notificationFields = ['recipient', 'title', 'message', 'type', 'link'];
 
 const router = express.Router();
+router.post('/payroll/preview', authorize(...adminHr), asyncHandler(async (req, res) => {
+  const amounts = ['baseSalary', 'allowances', 'bonuses', 'grossPay', 'otherDeductions', 'deductions', 'insurancePremium'];
+  for (const field of amounts) {
+    if (req.body[field] !== undefined &&
+      (!Number.isFinite(Number(req.body[field])) || Number(req.body[field]) < 0)) {
+      return res.status(400).json({ success: false, message: `${field} must be a non-negative number` });
+    }
+  }
+  res.json({ success: true, data: calculateKenyaPayroll(req.body) });
+}));
+
 const leaveBalance = asyncHandler(async (req, res) => {
   const year = Number(req.query.year || new Date().getUTCFullYear());
   if (!Number.isInteger(year) || year < 1900 || year > 9998) {
@@ -275,18 +303,27 @@ router.post('/payroll/generate', authorize(...adminHr), asyncHandler(async (req,
   const month = req.body && req.body.month;
   const { start, endExclusive } = monthBounds(month);
   const end = new Date(endExclusive.getTime() - 86400000);
-  const employees = await Employee.find({ employmentStatus: 'active' }).select('_id salary');
+  const employees = await Employee.find({ employmentStatus: 'active' })
+    .select('_id salary nssfExempt shifExempt housingLevyExempt payeExempt');
   if (employees.length) {
     await Payroll.bulkWrite(employees.map((employee) => {
       const baseSalary = Number(employee.salary || 0) / 12;
+      const exemptions = {
+        nssfExempt: employee.nssfExempt,
+        shifExempt: employee.shifExempt,
+        housingLevyExempt: employee.housingLevyExempt,
+        payeExempt: employee.payeExempt
+      };
+      const calculation = calculateKenyaPayroll({ baseSalary, ...exemptions });
       return {
         updateOne: {
           filter: { employee: employee._id, periodStart: start, periodEnd: end },
           update: {
             $setOnInsert: {
               employee: employee._id, periodStart: start, periodEnd: end,
-              baseSalary, allowances: 0, bonuses: 0, deductions: 0, tax: 0, netPay: baseSalary,
-              currency: 'USD', status: 'draft'
+              baseSalary, allowances: 0, bonuses: 0, otherDeductions: 0, deductions: 0,
+              insurancePremium: 0, ...exemptions, ...calculation,
+              tax: calculation.paye, currency: 'KES', status: 'draft'
             }
           },
           upsert: true
@@ -451,7 +488,7 @@ const exportReport = asyncHandler(async (req, res) => {
         { label: 'Last name', value: 'lastName' }, { label: 'Email', value: 'email' },
         { label: 'Department', value: (row) => row.department && row.department.name },
         { label: 'Job title', value: 'jobTitle' }, { label: 'Date of joining', value: 'hireDate' },
-        { label: 'Status', value: 'employmentStatus' }, { label: 'Salary', value: 'salary' }
+        { label: 'Status', value: 'employmentStatus' }, { label: 'Salary (KES)', value: 'salary' }
       ]
     },
     attendance: {
@@ -477,9 +514,20 @@ const exportReport = asyncHandler(async (req, res) => {
       columns: [
         { label: 'Employee ID', value: (row) => row.employee && row.employee.employeeId },
         { label: 'Period start', value: 'periodStart' }, { label: 'Period end', value: 'periodEnd' },
-        { label: 'Base salary', value: 'baseSalary' }, { label: 'Allowances', value: 'allowances' },
-        { label: 'Bonuses', value: 'bonuses' }, { label: 'Deductions', value: 'deductions' },
-        { label: 'Tax', value: 'tax' }, { label: 'Net pay', value: 'netPay' },
+        { label: 'Gross pay (KES)', value: 'grossPay' },
+        { label: 'NSSF employee (KES)', value: 'nssfEmployee' },
+        { label: 'NSSF employer (KES)', value: 'nssfEmployer' },
+        { label: 'SHIF (KES)', value: 'shif' },
+        { label: 'Housing levy employee (KES)', value: 'housingLevyEmployee' },
+        { label: 'Housing levy employer (KES)', value: 'housingLevyEmployer' },
+        { label: 'Taxable pay (KES)', value: 'taxablePay' },
+        { label: 'PAYE before relief (KES)', value: 'payeBeforeRelief' },
+        { label: 'Personal relief (KES)', value: 'personalRelief' },
+        { label: 'Insurance relief (KES)', value: 'insuranceRelief' },
+        { label: 'PAYE (KES)', value: 'paye' },
+        { label: 'Other deductions (KES)', value: 'otherDeductions' },
+        { label: 'Total deductions (KES)', value: 'totalDeductions' },
+        { label: 'Net pay (KES)', value: 'netPay' },
         { label: 'Status', value: 'status' }
       ]
     }
@@ -569,11 +617,26 @@ router.get('/payroll/:id/slip', authorize(...managers, 'employee'), requireEmplo
     return res.status(403).json({ success: false, message: 'Access denied' });
   }
   const employeeName = escapeHtml(payroll.employee.fullName);
-  const month = payroll.periodStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
-  const money = (amount) => `${escapeHtml(payroll.currency)} ${Number(amount || 0).toFixed(2)}`;
+  const month = payroll.periodStart.toLocaleDateString('en-KE', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+  const currencyFormatter = new Intl.NumberFormat('en-KE', {
+    style: 'currency', currency: 'KES', minimumFractionDigits: 2, maximumFractionDigits: 2
+  });
+  const money = (amount) => currencyFormatter.format(Number(amount || 0));
   const lines = [
     ['Basic salary', payroll.baseSalary], ['Allowances', payroll.allowances],
-    ['Bonuses', payroll.bonuses], ['Deductions', -payroll.deductions], ['Tax', -payroll.tax]
+    ['Bonuses', payroll.bonuses], ['Gross pay', payroll.grossPay],
+    ['NSSF employee contribution', -payroll.nssfEmployee],
+    ['SHIF', -payroll.shif],
+    ['Affordable Housing Levy (employee)', -payroll.housingLevyEmployee],
+    ['Taxable pay', payroll.taxablePay],
+    ['PAYE before relief', payroll.payeBeforeRelief],
+    ['Personal relief', -payroll.personalRelief],
+    ['Insurance relief', -payroll.insuranceRelief],
+    ['PAYE after relief', -payroll.paye],
+    ['Other deductions', -payroll.otherDeductions],
+    ['Total deductions', -payroll.totalDeductions],
+    ['NSSF employer contribution (not deducted from employee)', payroll.nssfEmployer],
+    ['Affordable Housing Levy (employer; not deducted from employee)', payroll.housingLevyEmployer]
   ];
   const rows = lines.map(([label, amount]) => `<tr><th>${label}</th><td>${money(amount)}</td></tr>`).join('');
   res.type('html').set('Content-Disposition', `inline; filename="payslip-${payroll.periodStart.toISOString().slice(0, 7)}.html"`)

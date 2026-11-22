@@ -3,6 +3,7 @@ import { Activity, ArrowDownRight, ArrowRight, ArrowUpRight, BriefcaseBusiness, 
 import { Link } from 'react-router-dom';
 import { api, getErrorMessage } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { formatCurrency } from '../services/currency.js';
 
 const fallback = {
   totalEmployees: null, presentToday: null, onLeave: null, monthlyPayroll: null,
@@ -11,7 +12,7 @@ const fallback = {
 
 function metricValue(value, kind) {
   if (value == null) return '—';
-  return kind === 'currency' ? new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value) : Number(value).toLocaleString();
+  return kind === 'currency' ? formatCurrency(value) : Number(value).toLocaleString();
 }
 
 export default function DashboardPage() {

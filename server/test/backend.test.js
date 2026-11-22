@@ -4,6 +4,7 @@ const mongoose = require('mongoose');
 const { validateEnvironment } = require('../src/config/env');
 const { escapeCsvCell, toCsv, pagination } = require('../src/utils/http');
 const { monthBounds } = require('../src/utils/dates');
+const { calculateKenyaPayroll, calculateNssf, calculatePaye } = require('../src/utils/kenyaPayroll');
 const { Employee, Attendance, Payroll } = require('../src/models');
 const {
   hashToken, createRefreshToken, refreshCookieOptions, clearRefreshCookieOptions
@@ -56,6 +57,60 @@ test('CSV export quotes fields and neutralizes spreadsheet formulas', () => {
     '"Name"\r\n"A ""quoted"", name"');
 });
 
+test('Kenyan statutory payroll calculation applies configured rates, bands, and reliefs', () => {
+  const nssf = calculateNssf(200000);
+  assert.deepEqual(nssf, { employee: 6480, employer: 6480, tierI: 540, tierII: 5940 });
+  assert.equal(calculateNssf(200000, true).employee, 0);
+  assert.equal(calculatePaye(24000), 2400);
+  assert.equal(calculatePaye(32333), 4483.25);
+  assert.equal(calculatePaye(800001), 242283.7);
+
+  const payroll = calculateKenyaPayroll({ baseSalary: 100000, insurancePremium: 10000 });
+  assert.deepEqual({
+    grossPay: payroll.grossPay,
+    nssfEmployee: payroll.nssfEmployee,
+    nssfEmployer: payroll.nssfEmployer,
+    shif: payroll.shif,
+    housingLevyEmployee: payroll.housingLevyEmployee,
+    housingLevyEmployer: payroll.housingLevyEmployer,
+    taxablePay: payroll.taxablePay,
+    payeBeforeRelief: payroll.payeBeforeRelief,
+    personalRelief: payroll.personalRelief,
+    insuranceRelief: payroll.insuranceRelief,
+    paye: payroll.paye,
+    totalDeductions: payroll.totalDeductions,
+    netPay: payroll.netPay
+  }, {
+    grossPay: 100000,
+    nssfEmployee: 6000,
+    nssfEmployer: 6000,
+    shif: 2750,
+    housingLevyEmployee: 1500,
+    housingLevyEmployer: 1500,
+    taxablePay: 89750,
+    payeBeforeRelief: 21708.35,
+    personalRelief: 2400,
+    insuranceRelief: 1500,
+    paye: 17808.35,
+    totalDeductions: 28058.35,
+    netPay: 71941.65
+  });
+
+  const lowPay = calculateKenyaPayroll({ grossPay: 6000 });
+  assert.equal(lowPay.shif, 300);
+  assert.equal(lowPay.paye, 0);
+  assert.equal(lowPay.netPay, 5250);
+  const exempt = calculateKenyaPayroll({
+    grossPay: 100000, nssfExempt: true, shifExempt: true,
+    housingLevyExempt: true, payeExempt: true, otherDeductions: 5000
+  });
+  assert.equal(exempt.nssfEmployee, 0);
+  assert.equal(exempt.shif, 0);
+  assert.equal(exempt.housingLevyEmployee, 0);
+  assert.equal(exempt.paye, 0);
+  assert.equal(exempt.netPay, 95000);
+});
+
 test('employee, attendance, and payroll virtuals expose computed business values', async () => {
   const department = new mongoose.Types.ObjectId();
   const employee = new Employee({
@@ -90,11 +145,23 @@ test('employee, attendance, and payroll virtuals expose computed business values
   assert.equal(lateStatus.status, 'late');
   const payroll = new Payroll({
     employee: employee._id, periodStart: new Date('2026-09-01'), periodEnd: new Date('2026-09-30'),
-    baseSalary: 1000, allowances: 100, bonuses: 50, deductions: 20, tax: 30
+    baseSalary: 100000, allowances: 0, bonuses: 0, deductions: 20, tax: 30,
+    insurancePremium: 10000, netPay: 1
   });
   await payroll.validate();
-  assert.equal(payroll.netPay, 1100);
-  assert.equal(payroll.netSalary, 1100);
+  assert.equal(payroll.currency, 'KES');
+  assert.equal(payroll.grossPay, 100000);
+  assert.equal(payroll.nssfEmployee, 6000);
+  assert.equal(payroll.nssfEmployer, 6000);
+  assert.equal(payroll.shif, 2750);
+  assert.equal(payroll.housingLevyEmployee, 1500);
+  assert.equal(payroll.payeBeforeRelief, 21708.35);
+  assert.equal(payroll.personalRelief, 2400);
+  assert.equal(payroll.otherDeductions, 20);
+  assert.equal(payroll.insuranceRelief, 1500);
+  assert.equal(payroll.totalDeductions, 28078.35);
+  assert.equal(payroll.netPay, 71921.65);
+  assert.equal(payroll.netSalary, 71921.65);
 });
 
 test('pagination is bounded and refresh credentials are opaque', () => {

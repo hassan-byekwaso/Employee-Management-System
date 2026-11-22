@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const mongoose = require('mongoose');
 const { validateEnvironment } = require('./src/config/env');
+const { calculateKenyaPayroll } = require('./src/utils/kenyaPayroll');
 const {
   User, Employee, Department, Attendance, Leave, Payroll, Performance, Goal, Notification
 } = require('./src/models');
@@ -18,12 +19,12 @@ async function seed() {
   const upsert = { new: true, upsert: true, runValidators: true, setDefaultsOnInsert: true };
   const engineering = await Department.findOneAndUpdate(
     { name: 'Engineering' }, {
-      $set: { description: 'Product engineering and platform', budget: 2400000 }
+      $set: { description: 'Product engineering and platform', budget: 3600000 }
     }, upsert
   );
   const people = await Department.findOneAndUpdate(
     { name: 'People Operations' }, {
-      $set: { description: 'Human resources and employee support', budget: 820000 }
+      $set: { description: 'Human resources and employee support', budget: 1800000 }
     }, upsert
   );
 
@@ -44,7 +45,7 @@ async function seed() {
     $set: {
       firstName: 'Alex', lastName: 'Morgan', email: 'alex.morgan@example.com',
       jobTitle: 'Engineering Manager', department: engineering._id,
-      hireDate: new Date('2022-03-14'), employmentStatus: 'active', salary: 120000
+      hireDate: new Date('2022-03-14'), employmentStatus: 'active', salary: 1440000
     }
   }, upsert);
   const managerUser = await getUser({
@@ -57,7 +58,7 @@ async function seed() {
     $set: {
       firstName: 'Taylor', lastName: 'Reed', email: 'taylor.reed@example.com',
       jobTitle: 'Software Engineer', department: engineering._id, manager: managerEmployee._id,
-      hireDate: new Date('2023-06-05'), employmentStatus: 'active', salary: 85000
+      hireDate: new Date('2023-06-05'), employmentStatus: 'active', salary: 1020000
     }
   }, upsert);
   const employeeUser = await getUser({
@@ -88,10 +89,16 @@ async function seed() {
   }, upsert);
   const periodStart = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth(), 1));
   const periodEnd = new Date(Date.UTC(day.getUTCFullYear(), day.getUTCMonth() + 1, 0));
+  const payrollCalculation = calculateKenyaPayroll({
+    baseSalary: 1020000 / 12,
+    bonuses: 5000,
+    otherDeductions: 2000
+  });
   await Payroll.findOneAndUpdate({ employee: employee._id, periodStart, periodEnd }, {
     $set: {
-      baseSalary: 85000 / 12, bonuses: 250, deductions: 100,
-      netPay: 85000 / 12 + 150, currency: 'USD', status: 'processed'
+      baseSalary: 1020000 / 12, allowances: 0, bonuses: 5000,
+      otherDeductions: 2000, deductions: 2000, ...payrollCalculation,
+      tax: payrollCalculation.paye, currency: 'KES', status: 'processed'
     }
   }, upsert);
   await Performance.findOneAndUpdate({ employee: employee._id, reviewPeriod: '2026 H2' }, {

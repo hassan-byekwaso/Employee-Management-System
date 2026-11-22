@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
 const { ROLES, LEAVE_STATUSES, ATTENDANCE_STATUSES, PERFORMANCE_STATUSES } = require('../config/constants');
+const { calculateKenyaPayroll } = require('../utils/kenyaPayroll');
 
 const { Schema } = mongoose;
 const options = { timestamps: true, toJSON: { virtuals: true }, toObject: { virtuals: true } };
@@ -51,6 +52,10 @@ const employeeSchema = new Schema({
   manager: { type: Schema.Types.ObjectId, ref: 'Employee', default: null },
   employmentStatus: { type: String, enum: ['active', 'inactive', 'on-leave', 'terminated'], default: 'active' },
   salary: { type: Number, min: 0, default: 0 },
+  nssfExempt: { type: Boolean, default: false },
+  shifExempt: { type: Boolean, default: false },
+  housingLevyExempt: { type: Boolean, default: false },
+  payeExempt: { type: Boolean, default: false },
   user: { type: Schema.Types.ObjectId, ref: 'User' },
   emergencyContact: {
     name: { type: String, trim: true, default: '' },
@@ -124,10 +129,28 @@ const payrollSchema = new Schema({
   baseSalary: { type: Number, required: true, min: 0 },
   allowances: { type: Number, min: 0, default: 0 },
   bonuses: { type: Number, min: 0, default: 0 },
+  otherDeductions: { type: Number, min: 0, default: undefined },
   deductions: { type: Number, min: 0, default: 0 },
   tax: { type: Number, min: 0, default: 0 },
+  insurancePremium: { type: Number, min: 0, default: 0 },
+  nssfExempt: { type: Boolean, default: false },
+  shifExempt: { type: Boolean, default: false },
+  housingLevyExempt: { type: Boolean, default: false },
+  payeExempt: { type: Boolean, default: false },
+  grossPay: { type: Number, min: 0, default: 0 },
+  nssfEmployee: { type: Number, min: 0, default: 0 },
+  nssfEmployer: { type: Number, min: 0, default: 0 },
+  shif: { type: Number, min: 0, default: 0 },
+  housingLevyEmployee: { type: Number, min: 0, default: 0 },
+  housingLevyEmployer: { type: Number, min: 0, default: 0 },
+  taxablePay: { type: Number, min: 0, default: 0 },
+  payeBeforeRelief: { type: Number, min: 0, default: 0 },
+  personalRelief: { type: Number, min: 0, default: 0 },
+  insuranceRelief: { type: Number, min: 0, default: 0 },
+  paye: { type: Number, min: 0, default: 0 },
+  totalDeductions: { type: Number, min: 0, default: 0 },
   netPay: { type: Number, required: true, min: 0 },
-  currency: { type: String, uppercase: true, default: 'USD' },
+  currency: { type: String, uppercase: true, default: 'KES' },
   paymentDate: Date,
   status: { type: String, enum: ['draft', 'processed', 'paid'], default: 'draft' }
 }, options);
@@ -137,9 +160,57 @@ payrollSchema.virtual('basicSalary').get(function basicSalary() {
 payrollSchema.virtual('netSalary').get(function netSalary() {
   return this.netPay;
 });
-payrollSchema.pre('validate', function calculateNetPay() {
-  this.netPay = Math.max(0, Number(this.baseSalary || 0) + Number(this.allowances || 0) +
-    Number(this.bonuses || 0) - Number(this.deductions || 0) - Number(this.tax || 0));
+function applyPayrollCalculation(target, values) {
+  const calculation = calculateKenyaPayroll({
+    baseSalary: values.baseSalary,
+    allowances: values.allowances,
+    bonuses: values.bonuses,
+    otherDeductions: values.otherDeductions,
+    deductions: values.deductions,
+    insurancePremium: values.insurancePremium,
+    nssfExempt: values.nssfExempt,
+    shifExempt: values.shifExempt,
+    housingLevyExempt: values.housingLevyExempt,
+    payeExempt: values.payeExempt
+  });
+  Object.assign(target, calculation, {
+    deductions: calculation.otherDeductions,
+    tax: calculation.paye,
+    currency: 'KES'
+  });
+}
+
+payrollSchema.pre('validate', function calculateStatutoryPayroll() {
+  applyPayrollCalculation(this, this);
+});
+payrollSchema.pre('findOneAndUpdate', async function calculateUpdatedStatutoryPayroll() {
+  const update = this.getUpdate() || {};
+  const changes = { ...(update.$set || {}) };
+  for (const [key, value] of Object.entries(update)) {
+    if (!key.startsWith('$')) changes[key] = value;
+  }
+  const existing = await this.model.findOne(this.getQuery()).lean();
+  const values = { ...(existing || {}), ...changes };
+  const calculation = calculateKenyaPayroll({
+    baseSalary: values.baseSalary,
+    allowances: values.allowances,
+    bonuses: values.bonuses,
+    otherDeductions: values.otherDeductions,
+    deductions: values.deductions,
+    insurancePremium: values.insurancePremium,
+    nssfExempt: values.nssfExempt,
+    shifExempt: values.shifExempt,
+    housingLevyExempt: values.housingLevyExempt,
+    payeExempt: values.payeExempt
+  });
+  const set = {
+    ...changes,
+    ...calculation,
+    deductions: calculation.otherDeductions,
+    tax: calculation.paye,
+    currency: 'KES'
+  };
+  this.setUpdate({ ...update, $set: set });
 });
 payrollSchema.index({ employee: 1, periodStart: 1, periodEnd: 1 }, { unique: true });
 

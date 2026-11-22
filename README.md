@@ -5,6 +5,8 @@ A full-stack employee management application with role-based access for Admin, H
 ## Features
 
 - Short-lived JWT access tokens with rotating refresh tokens in HTTP-only cookies.
+- Kenya-localized salary and payroll amounts displayed in Kenyan Shillings (KES).
+- Payroll runs calculate and itemize Kenyan NSSF, SHIF, Affordable Housing Levy, and PAYE deductions.
 - Server-side role enforcement and role-aware client routes.
 - Employee and department records, attendance check-in/out and reports, leave workflows and balances, payroll runs and payslips, performance reviews and goals.
 - Dashboard KPIs, department headcount, recent activity, daily missing-attendance reminders, in-app notifications, and downloadable CSV reports.

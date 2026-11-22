@@ -23,6 +23,12 @@ For a Vercel frontend and Render API on separate domains, set `VITE_API_URL` in 
 
 The refresh cookie uses `Secure`, `SameSite=None`, and `Partitioned` in production. Keep the frontend and backend on HTTPS so browsers can send it.
 
+## Kenyan payroll calculations
+
+Payroll gross pay is monthly basic salary plus allowances and bonuses. The statutory calculation is centralized in `src/utils/kenyaPayroll.js`; its effective NSSF limits are Tier I KES 9,000 and combined upper earnings limit KES 108,000, with 6% employee and matching employer contributions. SHIF is 2.75% of positive gross pay (KES 300 minimum), and the employee and employer Housing Levy contributions are each 1.5%. Employee NSSF, SHIF, and Housing Levy are deducted before progressive PAYE; PAYE uses the monthly bands and KES 2,400 personal relief. Eligible insurance premiums can generate insurance relief. Employee-level exemption flags are available for NSSF, SHIF, Housing Levy, and PAYE.
+
+Review the NSSF limits and rates in the utility against current NSSF notices when updating statutory rules. KRA's PAYE guidance lists SHIF and Affordable Housing Levy as allowable deductions in arriving at taxable employment income and describes the current monthly PAYE bands, personal relief, and insurance relief.
+
 Seeded demo accounts:
 
 | Role | Email | Password |
