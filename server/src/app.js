@@ -11,7 +11,18 @@ const dashboardRoutes = require('./routes/dashboard');
 function createApp() {
   const config = validateEnvironment(process.env);
   const app = express();
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
+  const corsOptions = {
+    credentials: true,
+    origin(origin, callback) {
+      if (!origin || config.origins.includes(origin)) return callback(null, true);
+      const error = new Error('Origin is not allowed by CORS');
+      error.statusCode = 403;
+      callback(error);
+    }
+  };
+  app.options('*', cors(corsOptions));
   app.use((req, res, next) => {
     res.set({
       'X-Content-Type-Options': 'nosniff',
@@ -20,15 +31,7 @@ function createApp() {
     });
     next();
   });
-  app.use(cors({
-    credentials: true,
-    origin(origin, callback) {
-      if (!origin || config.origins.includes(origin)) return callback(null, true);
-      const error = new Error('Origin is not allowed by CORS');
-      error.statusCode = 403;
-      callback(error);
-    }
-  }));
+  app.use(cors(corsOptions));
   app.use(express.json({ limit: '1mb' }));
   app.use(express.urlencoded({ extended: false, limit: '1mb' }));
   app.use((req, res, next) => {

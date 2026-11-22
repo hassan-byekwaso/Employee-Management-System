@@ -13,11 +13,8 @@ function validateEnvironment(env) {
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
     throw new Error('PORT must be an integer between 1 and 65535');
   }
-  const sameSite = env.NODE_ENV === 'production' ? 'none' : 'lax';
-  const secure = env.COOKIE_SECURE === 'true';
-  if (env.NODE_ENV === 'production' && !secure) {
-    throw new Error('COOKIE_SECURE=true is required in production');
-  }
+  const secure = env.NODE_ENV === 'production' || env.COOKIE_SECURE === 'true';
+  const sameSite = secure ? 'none' : 'lax';
   const origins = (env.CLIENT_ORIGIN || env.CLIENT_ORIGINS || '')
     .split(',')
     .map((origin) => origin.trim())

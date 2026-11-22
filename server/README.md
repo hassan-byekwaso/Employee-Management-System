@@ -12,6 +12,17 @@ npm start
 
 The API validates configuration and connects to MongoDB before listening. The seed command is safe to rerun and updates the same demo records. Override individual demo passwords with `SEED_ADMIN_PASSWORD`, `SEED_HR_PASSWORD`, `SEED_MANAGER_PASSWORD`, and `SEED_EMPLOYEE_PASSWORD`.
 
+## Production deployment
+
+For a Vercel frontend and Render API on separate domains, set `VITE_API_URL` in Vercel to the full Render API URL ending in `/api` (for example, `https://your-service.onrender.com/api`). Set these Render environment variables:
+
+- `NODE_ENV=production`
+- `CLIENT_ORIGIN=https://your-frontend.vercel.app` (the exact frontend origin, without a path; comma-separated origins are supported)
+- `MONGODB_URI` and `JWT_ACCESS_SECRET` (at least 32 characters)
+- `COOKIE_SECURE=true` (production already enables secure cookies, but setting this explicitly documents the intended policy)
+
+The refresh cookie uses `Secure`, `SameSite=None`, and `Partitioned` in production. Keep the frontend and backend on HTTPS so browsers can send it.
+
 Seeded demo accounts:
 
 | Role | Email | Password |

@@ -34,12 +34,12 @@ test('cookie policy follows production and COOKIE_SECURE settings', () => {
   const development = validateEnvironment(validEnv);
   assert.equal(development.cookieSameSite, 'lax');
   assert.equal(development.cookieSecure, false);
-  const production = validateEnvironment({
-    ...validEnv, NODE_ENV: 'production', COOKIE_SECURE: 'true'
-  });
+  const production = validateEnvironment({ ...validEnv, NODE_ENV: 'production' });
   assert.equal(production.cookieSameSite, 'none');
   assert.equal(production.cookieSecure, true);
-  assert.throws(() => validateEnvironment({ ...validEnv, NODE_ENV: 'production' }), /COOKIE_SECURE=true/);
+  const explicitlySecure = validateEnvironment({ ...validEnv, COOKIE_SECURE: 'true' });
+  assert.equal(explicitlySecure.cookieSameSite, 'none');
+  assert.equal(explicitlySecure.cookieSecure, true);
 });
 
 test('month filters use inclusive calendar bounds and reject invalid values', () => {
@@ -106,14 +106,30 @@ test('pagination is bounded and refresh credentials are opaque', () => {
     cookieSecure: true, cookieSameSite: 'none', refreshDays: 3
   });
   assert.equal(cookie.httpOnly, true);
-  assert.equal(cookie.path, '/api/auth');
+  assert.equal(cookie.secure, true);
+  assert.equal(cookie.sameSite, 'none');
+  assert.equal(cookie.path, '/');
+  assert.equal(cookie.partitioned, true);
   assert.equal(cookie.maxAge, 259200000);
-  assert.equal(Object.hasOwn(clearRefreshCookieOptions({
+  const clearCookie = clearRefreshCookieOptions({
     cookieSecure: true, cookieSameSite: 'none', refreshDays: 3
-  }), 'maxAge'), false);
+  });
+  assert.equal(clearCookie.secure, true);
+  assert.equal(clearCookie.sameSite, 'none');
+  assert.equal(clearCookie.path, '/');
+  assert.equal(clearCookie.partitioned, true);
+  assert.equal(Object.hasOwn(clearCookie, 'maxAge'), false);
+  const localCookie = refreshCookieOptions({
+    cookieSecure: false, cookieSameSite: 'lax', refreshDays: 3
+  });
+  assert.equal(localCookie.secure, false);
+  assert.equal(localCookie.sameSite, 'lax');
+  assert.equal(localCookie.path, '/');
+  assert.equal(Object.hasOwn(localCookie, 'partitioned'), false);
 });
 
 test('HTTP app serves health and protects API routes', async () => {
+  assert.equal(app.get('trust proxy'), 1);
   const server = app.listen(0);
   try {
     const address = server.address();
@@ -130,6 +146,7 @@ test('HTTP app serves health and protects API routes', async () => {
       }
     });
     assert.equal(preflight.status, 204);
+    assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://app.example.com');
     assert.equal(preflight.headers.get('access-control-allow-credentials'), 'true');
     const protectedResponse = await fetch(`${base}/api/dashboard`);
     assert.equal(protectedResponse.status, 401);

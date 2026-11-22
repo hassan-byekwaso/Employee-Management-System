@@ -23,14 +23,18 @@ function refreshCookieOptions(env = config()) {
     httpOnly: true,
     secure: env.cookieSecure,
     sameSite: env.cookieSameSite,
-    path: '/api/auth',
+    path: '/',
+    ...(env.cookieSecure ? { partitioned: true } : {}),
     maxAge: env.refreshDays * 24 * 60 * 60 * 1000
   };
 }
 
 function clearRefreshCookieOptions(env = config()) {
-  const { httpOnly, secure, sameSite, path } = refreshCookieOptions(env);
-  return { httpOnly, secure, sameSite, path };
+  const { httpOnly, secure, sameSite, path, partitioned } = refreshCookieOptions(env);
+  return {
+    httpOnly, secure, sameSite, path,
+    ...(partitioned ? { partitioned } : {})
+  };
 }
 
 async function authenticate(req, res, next) {
